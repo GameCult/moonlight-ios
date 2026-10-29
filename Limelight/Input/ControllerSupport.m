@@ -17,7 +17,44 @@
 @import GameController;
 @import AudioToolbox;
 
+// The iOS SDK ships IOKit without its HID headers, though IOKit exports these
+// functions. They are declared here for the IOHID gamepad fallback below.
+__asm__(".linker_option \"-framework\", \"IOKit\"");
+typedef struct __IOHIDManager* IOHIDManagerRef;
+typedef struct __IOHIDDevice* IOHIDDeviceRef;
+typedef void (*IOHIDDeviceCallback)(void* context, int32_t result, void* sender, IOHIDDeviceRef device);
+typedef void (*IOHIDReportCallback)(void* context, int32_t result, void* sender, uint32_t type, uint32_t reportID, uint8_t* report, CFIndex reportLength);
+extern IOHIDManagerRef IOHIDManagerCreate(CFAllocatorRef allocator, uint32_t options);
+extern void IOHIDManagerSetDeviceMatching(IOHIDManagerRef manager, CFDictionaryRef matching);
+extern void IOHIDManagerRegisterDeviceMatchingCallback(IOHIDManagerRef manager, IOHIDDeviceCallback callback, void* context);
+extern void IOHIDManagerRegisterDeviceRemovalCallback(IOHIDManagerRef manager, IOHIDDeviceCallback callback, void* context);
+extern void IOHIDManagerScheduleWithRunLoop(IOHIDManagerRef manager, CFRunLoopRef runLoop, CFStringRef runLoopMode);
+extern void IOHIDManagerUnscheduleFromRunLoop(IOHIDManagerRef manager, CFRunLoopRef runLoop, CFStringRef runLoopMode);
+extern int32_t IOHIDManagerOpen(IOHIDManagerRef manager, uint32_t options);
+extern int32_t IOHIDManagerClose(IOHIDManagerRef manager, uint32_t options);
+extern int32_t IOHIDDeviceOpen(IOHIDDeviceRef device, uint32_t options);
+extern void IOHIDDeviceRegisterInputReportCallback(IOHIDDeviceRef device, uint8_t* report, CFIndex reportLength, IOHIDReportCallback callback, void* context);
+extern int32_t IOHIDDeviceSetReport(IOHIDDeviceRef device, uint32_t reportType, CFIndex reportID, const uint8_t* report, CFIndex reportLength);
+#define kIOHIDReportTypeOutput 1
+
+// Xbox One S controller on Microsoft's Bluetooth LE firmware (5.x). GameController
+// on iOS 14.4 never exposes it as a GCController, so it is read over IOHID instead.
+// Its input report 1 is 17 bytes: report ID, four 16-bit sticks (0-65535, Y down),
+// two 10-bit triggers, a 1-8 hat (0 = released), 15 buttons and a consumer byte.
+// Output report 3 drives rumble. The layout matches SDL's HIDAPI Xbox One driver.
+#define XBOX_BLE_VID 0x045E
+#define XBOX_BLE_PID 0x0B20
+#define XBOX_BLE_INPUT_REPORT_LEN 17
+
 static const double MOUSE_SPEED_DIVISOR = 1.25;
+
+// Called from the IOHID C callbacks, whose bodies are compiled before these methods
+@interface ControllerSupport ()
+-(Controller*) controllerForHIDDevice:(IOHIDDeviceRef)device;
+-(void) handleXboxBLEReport:(Controller*)limeController report:(const uint8_t*)report length:(CFIndex)length;
+-(void) addHIDDevice:(IOHIDDeviceRef)device;
+-(void) removeController:(Controller*)limeController;
+@end
 
 @implementation ControllerSupport {
     id _controllerConnectObserver;
@@ -38,6 +75,8 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
     
     OnScreenControls *_osc;
     Controller *_oscController;
+
+    IOHIDManagerRef _hidManager;
     
 #define EMULATING_SELECT     0x1
 #define EMULATING_SPECIAL    0x2
@@ -64,7 +103,15 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
         // No connected controller for this player
         return;
     }
-    
+
+    if (controller.hidDevice) {
+        // Output report 3: enable both handle motors, magnitudes 0-100,
+        // maximum duration, no delay, repeated until the next report.
+        uint8_t report[] = { 0x03, 0x03, 0x00, 0x00, lowFreqMotor / 655, highFreqMotor / 655, 0xFF, 0x00, 0xEB };
+        IOHIDDeviceSetReport((IOHIDDeviceRef)controller.hidDevice, kIOHIDReportTypeOutput, report[0], report, sizeof(report));
+        return;
+    }
+
     [controller.lowFreqMotor setMotorAmplitude:lowFreqMotor];
     [controller.highFreqMotor setMotorAmplitude:highFreqMotor];
 }
@@ -617,11 +664,19 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
                 LB_FLAG | RB_FLAG | LS_CLK_FLAG | RS_CLK_FLAG | A_FLAG | B_FLAG | X_FLAG | Y_FLAG;
         }
     }
+    else if (limeController.hidDevice) {
+        // Xbox One S on Bluetooth LE firmware, read over IOHID
+        type = LI_CTYPE_XBOX;
+        capabilities = LI_CCAP_RUMBLE;
+        supportedButtonFlags =
+            PLAY_FLAG | BACK_FLAG | SPECIAL_FLAG | UP_FLAG | DOWN_FLAG | LEFT_FLAG | RIGHT_FLAG |
+            LB_FLAG | RB_FLAG | LS_CLK_FLAG | RS_CLK_FLAG | A_FLAG | B_FLAG | X_FLAG | Y_FLAG;
+    }
 
     // Report the new controller to the host
     // NB: This will fail if the connection hasn't been fully established yet
     // and we will try again later.
-    if (LiSendControllerArrivalEvent(controller.playerIndex,
+    if (LiSendControllerArrivalEvent(limeController.playerIndex,
                                      [self getActiveGamepadMask],
                                      type,
                                      supportedButtonFlags,
@@ -916,6 +971,167 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
 #endif
 }
 
+-(Controller*) controllerForHIDDevice:(IOHIDDeviceRef)device
+{
+    for (Controller* controller in [_controllers allValues]) {
+        if (controller.hidDevice == device) {
+            return controller;
+        }
+    }
+    return nil;
+}
+
+-(void) handleXboxBLEReport:(Controller*)limeController report:(const uint8_t*)report length:(CFIndex)length
+{
+    if (length < XBOX_BLE_INPUT_REPORT_LEN || report[0] != 1) {
+        return;
+    }
+
+    uint8_t buttons1 = report[14];
+    uint8_t buttons2 = report[15];
+
+    if (_swapABXYButtons) {
+        UPDATE_BUTTON_FLAG(limeController, B_FLAG, buttons1 & 0x01);
+        UPDATE_BUTTON_FLAG(limeController, A_FLAG, buttons1 & 0x02);
+        UPDATE_BUTTON_FLAG(limeController, Y_FLAG, buttons1 & 0x08);
+        UPDATE_BUTTON_FLAG(limeController, X_FLAG, buttons1 & 0x10);
+    }
+    else {
+        UPDATE_BUTTON_FLAG(limeController, A_FLAG, buttons1 & 0x01);
+        UPDATE_BUTTON_FLAG(limeController, B_FLAG, buttons1 & 0x02);
+        UPDATE_BUTTON_FLAG(limeController, X_FLAG, buttons1 & 0x08);
+        UPDATE_BUTTON_FLAG(limeController, Y_FLAG, buttons1 & 0x10);
+    }
+    UPDATE_BUTTON_FLAG(limeController, LB_FLAG, buttons1 & 0x40);
+    UPDATE_BUTTON_FLAG(limeController, RB_FLAG, buttons1 & 0x80);
+
+    // The consumer byte carries View as well on some firmware revisions
+    UPDATE_BUTTON_FLAG(limeController, BACK_FLAG, (buttons2 & 0x04) || (report[16] & 0x01));
+    UPDATE_BUTTON_FLAG(limeController, PLAY_FLAG, buttons2 & 0x08);
+    UPDATE_BUTTON_FLAG(limeController, SPECIAL_FLAG, buttons2 & 0x10);
+    UPDATE_BUTTON_FLAG(limeController, LS_CLK_FLAG, buttons2 & 0x20);
+    UPDATE_BUTTON_FLAG(limeController, RS_CLK_FLAG, buttons2 & 0x40);
+
+    // Hat: 1 = up, clockwise through 8 = up-left, 0 = released
+    uint8_t hat = report[13];
+    UPDATE_BUTTON_FLAG(limeController, UP_FLAG, hat == 1 || hat == 2 || hat == 8);
+    UPDATE_BUTTON_FLAG(limeController, RIGHT_FLAG, hat >= 2 && hat <= 4);
+    UPDATE_BUTTON_FLAG(limeController, DOWN_FLAG, hat >= 4 && hat <= 6);
+    UPDATE_BUTTON_FLAG(limeController, LEFT_FLAG, hat >= 6 && hat <= 8);
+
+    // Sticks are unsigned with Y pointing down; Moonlight wants signed with Y pointing up
+    #define XBOX_BLE_AXIS(offset) ((int)(report[(offset)] | (report[(offset) + 1] << 8)) - 0x8000)
+    #define XBOX_BLE_AXIS_Y(offset) ((short)MIN(-XBOX_BLE_AXIS(offset), 0x7FFF))
+    [self updateLeftStick:limeController x:XBOX_BLE_AXIS(1) y:XBOX_BLE_AXIS_Y(3)];
+    [self updateRightStick:limeController x:XBOX_BLE_AXIS(5) y:XBOX_BLE_AXIS_Y(7)];
+    #undef XBOX_BLE_AXIS
+    #undef XBOX_BLE_AXIS_Y
+
+    // Triggers are 10 bits
+    [self updateTriggers:limeController
+                    left:((report[9] | (report[10] << 8)) & 0x3FF) >> 2
+                   right:((report[11] | (report[12] << 8)) & 0x3FF) >> 2];
+    [self updateFinished:limeController];
+}
+
+static void hidReportCallback(void* context, int32_t result, void* sender, uint32_t type, uint32_t reportID, uint8_t* report, CFIndex reportLength)
+{
+    ControllerSupport* me = (__bridge ControllerSupport*)context;
+    Controller* limeController = [me controllerForHIDDevice:(IOHIDDeviceRef)sender];
+    if (limeController) {
+        [me handleXboxBLEReport:limeController report:report length:reportLength];
+    }
+}
+
+static void hidDeviceMatched(void* context, int32_t result, void* sender, IOHIDDeviceRef device)
+{
+    [(__bridge ControllerSupport*)context addHIDDevice:device];
+}
+
+static void hidDeviceRemoved(void* context, int32_t result, void* sender, IOHIDDeviceRef device)
+{
+    ControllerSupport* me = (__bridge ControllerSupport*)context;
+    Controller* limeController = [me controllerForHIDDevice:device];
+    if (limeController) {
+        Log(LOG_I, @"IOHID Xbox controller disconnected");
+        [me removeController:limeController];
+    }
+}
+
+-(void) addHIDDevice:(IOHIDDeviceRef)device
+{
+    // Newer iOS versions expose this controller through GameController
+    // themselves; don't add a second player for the same gamepad.
+    if (@available(iOS 14.0, tvOS 14.0, *)) {
+        for (GCController* controller in [GCController controllers]) {
+            if ([controller.extendedGamepad isKindOfClass:[GCXboxGamepad class]]) {
+                Log(LOG_I, @"Ignoring IOHID Xbox controller already exposed by GameController");
+                return;
+            }
+        }
+    }
+
+    int32_t err = IOHIDDeviceOpen(device, 0);
+    if (err != 0) {
+        Log(LOG_W, @"Unable to open IOHID Xbox controller: 0x%x", err);
+        return;
+    }
+
+    Controller* limeController = [self allocateController];
+    if (limeController == nil) {
+        return;
+    }
+    limeController.hidDevice = device;
+    limeController.hidReportBuffer = [NSMutableData dataWithLength:64];
+
+    // The physical View and Xbox buttons make combo emulation unnecessary
+    limeController.supportedEmulationFlags = 0;
+
+    IOHIDDeviceRegisterInputReportCallback(device, limeController.hidReportBuffer.mutableBytes,
+                                           limeController.hidReportBuffer.length, hidReportCallback, (__bridge void*)self);
+    Log(LOG_I, @"IOHID Xbox controller connected");
+
+    [self reportControllerArrival:limeController];
+    [self updateAutoOnScreenControlMode];
+    [_delegate gamepadPresenceChanged];
+}
+
+-(void) startHIDGamepads
+{
+    _hidManager = IOHIDManagerCreate(kCFAllocatorDefault, 0);
+    if (_hidManager == NULL) {
+        return;
+    }
+
+    NSDictionary* matching = @{ @"VendorID": @(XBOX_BLE_VID), @"ProductID": @(XBOX_BLE_PID) };
+    IOHIDManagerSetDeviceMatching(_hidManager, (__bridge CFDictionaryRef)matching);
+    IOHIDManagerRegisterDeviceMatchingCallback(_hidManager, hidDeviceMatched, (__bridge void*)self);
+    IOHIDManagerRegisterDeviceRemovalCallback(_hidManager, hidDeviceRemoved, (__bridge void*)self);
+    IOHIDManagerScheduleWithRunLoop(_hidManager, CFRunLoopGetMain(), kCFRunLoopDefaultMode);
+
+    // This needs com.apple.security.iokit-user-client-class to allow IOHIDLibUserClient,
+    // which only the GameCult TrollStore build carries. Without it, opening fails and
+    // this source stays empty.
+    int32_t err = IOHIDManagerOpen(_hidManager, 0);
+    if (err != 0) {
+        Log(LOG_I, @"IOHID gamepad fallback unavailable: 0x%x", err);
+    }
+}
+
+-(void) stopHIDGamepads
+{
+    if (_hidManager == NULL) {
+        return;
+    }
+
+    IOHIDManagerRegisterDeviceMatchingCallback(_hidManager, NULL, NULL);
+    IOHIDManagerRegisterDeviceRemovalCallback(_hidManager, NULL, NULL);
+    IOHIDManagerUnscheduleFromRunLoop(_hidManager, CFRunLoopGetMain(), kCFRunLoopDefaultMode);
+    IOHIDManagerClose(_hidManager, 0);
+    CFRelease(_hidManager);
+    _hidManager = NULL;
+}
+
 -(void) updateAutoOnScreenControlMode
 {
     // Auto on-screen control support may not be enabled
@@ -949,7 +1165,14 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
             }
         }
     }
-    
+
+    // An IOHID gamepad has every button, so it needs no on-screen help
+    for (Controller* controller in [_controllers allValues]) {
+        if (controller.hidDevice) {
+            level = OnScreenControlsLevelOff;
+        }
+    }
+
     // If we didn't find a gamepad present and we have a keyboard or mouse, turn
     // the on-screen controls off to get the overlays out of the way.
     if (level == OnScreenControlsLevelFull && [ControllerSupport hasKeyboardOrMouse]) {
@@ -971,48 +1194,88 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
     [self updateAutoOnScreenControlMode];
 }
 
--(Controller*) assignController:(GCController*)controller {
+-(Controller*) allocateController {
     for (int i = 0; i < 4; i++) {
         if (!(_controllerNumbers & (1 << i))) {
             _controllerNumbers |= (1 << i);
-            controller.playerIndex = i;
-            
+
             Controller* limeController = [[Controller alloc] init];
             limeController.playerIndex = i;
             limeController.supportedEmulationFlags = EMULATING_SPECIAL | EMULATING_SELECT;
-            limeController.gamepad = controller;
 
             // If this is player 0, it shares state with the OSC
             limeController.mergedWithController = _oscController;
             _oscController.mergedWithController = limeController;
-            
-            if (@available(iOS 13.0, tvOS 13.0, *)) {
-                if (controller.extendedGamepad != nil &&
-                    controller.extendedGamepad.buttonOptions != nil) {
-                    // Disable select button emulation since we have a physical select button
-                    limeController.supportedEmulationFlags &= ~EMULATING_SELECT;
-                }
-            }
-            
-            if (@available(iOS 14.0, tvOS 14.0, *)) {
-                if (controller.extendedGamepad != nil &&
-                    controller.extendedGamepad.buttonHome != nil) {
-                    // Disable special button emulation since we have a physical special button
-                    limeController.supportedEmulationFlags &= ~EMULATING_SPECIAL;
-                }
-            }
-            
-            // Prepare controller haptics for use
-            [self initializeControllerHaptics:limeController];
 
-            [_controllers setObject:limeController forKey:[NSNumber numberWithInteger:controller.playerIndex]];
-            
+            [_controllers setObject:limeController forKey:[NSNumber numberWithInteger:i]];
+
             Log(LOG_I, @"Assigning controller index: %d", i);
             return limeController;
         }
     }
-    
+
     return nil;
+}
+
+-(Controller*) assignController:(GCController*)controller {
+    Controller* limeController = [self allocateController];
+    if (limeController == nil) {
+        return nil;
+    }
+
+    controller.playerIndex = limeController.playerIndex;
+    limeController.gamepad = controller;
+
+    if (@available(iOS 13.0, tvOS 13.0, *)) {
+        if (controller.extendedGamepad != nil &&
+            controller.extendedGamepad.buttonOptions != nil) {
+            // Disable select button emulation since we have a physical select button
+            limeController.supportedEmulationFlags &= ~EMULATING_SELECT;
+        }
+    }
+
+    if (@available(iOS 14.0, tvOS 14.0, *)) {
+        if (controller.extendedGamepad != nil &&
+            controller.extendedGamepad.buttonHome != nil) {
+            // Disable special button emulation since we have a physical special button
+            limeController.supportedEmulationFlags &= ~EMULATING_SPECIAL;
+        }
+    }
+
+    // Prepare controller haptics for use
+    [self initializeControllerHaptics:limeController];
+
+    return limeController;
+}
+
+-(void) removeController:(Controller*)limeController {
+    _controllerNumbers &= ~(1 << limeController.playerIndex);
+    Log(LOG_I, @"Unassigning controller index: %d", limeController.playerIndex);
+
+    // Stop haptics on this controller
+    [self cleanupControllerHaptics:limeController];
+
+    // Stop motion reports on this controller
+    [self cleanupControllerMotion:limeController];
+
+    // Stop battery reports on this controller
+    [self cleanupControllerBattery:limeController];
+
+    // Disassociate this controller from any controllers merged with it
+    if (limeController.mergedWithController) {
+        assert(limeController.mergedWithController.mergedWithController == limeController);
+        limeController.mergedWithController.mergedWithController = nil;
+    }
+
+    // Inform the server of the updated active gamepads before removing this controller
+    [self updateFinished:limeController];
+    [_controllers removeObjectForKey:[NSNumber numberWithInteger:limeController.playerIndex]];
+
+    // Re-evaluate the on-screen control mode
+    [self updateAutoOnScreenControlMode];
+
+    // Notify the delegate
+    [_delegate gamepadPresenceChanged];
 }
 
 -(Controller*) getOscController {
@@ -1102,7 +1365,11 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
             // because the connection has not been established yet.
         }
     }
-    
+
+    // Gamepads GameController doesn't expose. Devices already connected are
+    // matched while the run loop runs, after this initializer returns.
+    [self startHIDGamepads];
+
     if (@available(iOS 14.0, tvOS 14.0, *)) {
         for (GCMouse* mouse in [GCMouse mice]) {
             [self registerMouseCallbacks:mouse];
@@ -1145,35 +1412,13 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
         }
         
         [self unregisterControllerCallbacks:controller];
-        self->_controllerNumbers &= ~(1 << controller.playerIndex);
-        Log(LOG_I, @"Unassigning controller index: %ld", (long)controller.playerIndex);
-        
+
         Controller* limeController = [self->_controllers objectForKey:[NSNumber numberWithInteger:controller.playerIndex]];
         if (limeController) {
-            // Stop haptics on this controller
-            [self cleanupControllerHaptics:limeController];
-            
-            // Stop motion reports on this controller
-            [self cleanupControllerMotion:limeController];
-            
-            // Stop battery reports on this controller
-            [self cleanupControllerBattery:limeController];
-            
-            // Disassociate this controller from any controllers merged with it
-            if (limeController.mergedWithController) {
-                assert(limeController.mergedWithController.mergedWithController == limeController);
-                limeController.mergedWithController.mergedWithController = nil;
-            }
-            
-            // Inform the server of the updated active gamepads before removing this controller
-            [self updateFinished:limeController];
-            [self->_controllers removeObjectForKey:[NSNumber numberWithInteger:controller.playerIndex]];
-            
-            // Re-evaluate the on-screen control mode
-            [self updateAutoOnScreenControlMode];
-            
-            // Notify the delegate
-            [self->_delegate gamepadPresenceChanged];
+            [self removeController:limeController];
+        }
+        else {
+            self->_controllerNumbers &= ~(1 << controller.playerIndex);
         }
     }];
     
@@ -1248,7 +1493,9 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
     _keyboardDisconnectObserver = nil;
     
     _controllerNumbers = 0;
-    
+
+    [self stopHIDGamepads];
+
     for (Controller* controller in [_controllers allValues]) {
         [self cleanupControllerHaptics:controller];
         [self cleanupControllerMotion:controller];

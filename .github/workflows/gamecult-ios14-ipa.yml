@@ -42,6 +42,11 @@ jobs:
         run: |
           APP=$(ls -d build/Build/Products/Release-iphoneos/*.app | head -1)
           /usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$APP/Info.plist"
+          # Embed the entitlements with an ad-hoc signature on the main binary;
+          # TrollStore keeps them when it signs the app on install.
+          EXE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")
+          codesign -f -s - --entitlements GameCult/TrollStore.entitlements "$APP/$EXE"
+          codesign -d --entitlements - "$APP/$EXE"
           mkdir Payload
           cp -R "$APP" Payload/
           zip -qry Moonlight-ios14-unsigned.ipa Payload

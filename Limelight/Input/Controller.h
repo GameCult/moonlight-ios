@@ -19,6 +19,9 @@ typedef struct {
 } controller_touch_context_t;
 
 @property (nullable, nonatomic, retain) GCController* gamepad;
+// IOHIDDeviceRef for a gamepad that GameController doesn't expose (see ControllerSupport.m)
+@property (nullable, nonatomic)         void* hidDevice;
+@property (nullable, nonatomic, retain) NSMutableData* hidReportBuffer;
 @property (nonatomic)                   int playerIndex;
 @property (nonatomic)                   int lastButtonFlags;
 @property (nonatomic)                   int emulatingButtonFlags;

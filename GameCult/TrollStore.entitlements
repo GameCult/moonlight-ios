@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Lets the IOHID gamepad fallback in ControllerSupport.m open IOHIDLibUserClient.
+	     Without it the kernel's sandbox hook closes the client and IOServiceOpen returns
+	     kIOReturnNotPermitted. TrollStore keeps entitlements embedded in the binary. -->
+	<key>com.apple.security.iokit-user-client-class</key>
+	<array>
+		<string>IOHIDLibUserClient</string>
+	</array>
+</dict>
+</plist>
