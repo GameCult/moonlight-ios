@@ -1,0 +1,54 @@
+name: GameCult iOS 14 IPA
+
+# Builds an unsigned device IPA for TrollStore on iOS/iPadOS 14.
+# Upstream raised the deployment target to iOS 15 in 7c79fcc ("for Xcode 27");
+# this branch sits on its parent 159ffdb (target iOS 12) and builds with Xcode 16.
+
+on:
+  push:
+    branches:
+      - gamecult/ios14-build
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ipa:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Select Xcode 16
+        run: |
+          ls -d /Applications/Xcode_16*.app
+          XC=$(ls -d /Applications/Xcode_16*.app | sort -V | tail -1)
+          sudo xcode-select -s "$XC/Contents/Developer"
+          xcodebuild -version
+
+      - name: Build unsigned device app
+        run: |
+          xcodebuild -project Moonlight.xcodeproj -scheme Moonlight \
+            -configuration Release -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package IPA
+        run: |
+          APP=$(ls -d build/Build/Products/Release-iphoneos/*.app | head -1)
+          /usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$APP/Info.plist"
+          mkdir Payload
+          cp -R "$APP" Payload/
+          zip -qry Moonlight-ios14-unsigned.ipa Payload
+          shasum -a 256 Moonlight-ios14-unsigned.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Moonlight-ios14-unsigned
+          path: Moonlight-ios14-unsigned.ipa

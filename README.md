@@ -1,3 +1,16 @@
+# GameCult build of Moonlight iOS for iOS/iPadOS 14
+
+This fork exists for one artifact: an **unsigned Moonlight IPA that installs with TrollStore on iOS/iPadOS 14**, for a device that cannot use the App Store.
+
+- **Branch:** `gamecult/ios14-build`, based on upstream commit `159ffdb` (2026-09-26). That is the last commit before upstream raised the minimum to iOS 15 in `7c79fcc`, a change made for Xcode 27.
+- **Build:** `.github/workflows/gamecult-ios14-ipa.yml` runs on GitHub's macOS runner with Xcode 16 and uploads `Moonlight-ios14-unsigned.ipa` as a workflow artifact.
+- **Install:** with TrollStore, which signs the app itself.
+- **Status:** a personal build, not a maintained distribution. For a supported Moonlight, use the [upstream app](https://github.com/moonlight-stream/moonlight-ios).
+
+Everything below is upstream's README.
+
+---
+
 # Moonlight iOS/tvOS
 
 [![AppVeyor Build Status](https://ci.appveyor.com/api/projects/status/kwv8vpwr457lqn25/branch/master?svg=true)](https://ci.appveyor.com/project/cgutman/moonlight-ios/branch/master)
