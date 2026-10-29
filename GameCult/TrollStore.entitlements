@@ -4,8 +4,13 @@
 <dict>
 	<!-- Lets the IOHID gamepad fallback in ControllerSupport.m open IOHIDLibUserClient.
 	     Without it the kernel's sandbox hook closes the client and IOServiceOpen returns
-	     kIOReturnNotPermitted. TrollStore keeps entitlements embedded in the binary. -->
+	     kIOReturnNotPermitted. The platform policy reads the first key; the app container
+	     profile reads only the exception key. TrollStore keeps both in the binary. -->
 	<key>com.apple.security.iokit-user-client-class</key>
+	<array>
+		<string>IOHIDLibUserClient</string>
+	</array>
+	<key>com.apple.security.exception.iokit-user-client-class</key>
 	<array>
 		<string>IOHIDLibUserClient</string>
 	</array>

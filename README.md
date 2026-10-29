@@ -5,6 +5,7 @@ This fork exists for one artifact: an **unsigned Moonlight IPA that installs wit
 - **Branch:** `gamecult/ios14-build`, based on upstream commit `159ffdb` (2026-09-26). That is the last commit before upstream raised the minimum to iOS 15 in `7c79fcc`, a change made for Xcode 27.
 - **Build:** `.github/workflows/gamecult-ios14-ipa.yml` runs on GitHub's macOS runner with Xcode 16 and uploads `Moonlight-ios14-unsigned.ipa` as a workflow artifact.
 - **Install:** with TrollStore, which signs the app itself.
+- **Xbox One S on Bluetooth LE firmware:** iOS 14.4 connects this controller (VID `0x045E`, PID `0x0B20`, firmware 5.x) as a HID device, but GameController never exposes it, so stock Moonlight sees no controller. `Limelight/Input/ControllerSupport.m` adds an IOHIDManager source for it. It parses input report 1 (the layout SDL's HIDAPI Xbox One driver uses), feeds the same controller path as GameController pads, and drives rumble through output report 3. Controllers that GameController recognises are untouched. Opening the device needs the entitlement in `GameCult/TrollStore.entitlements` (`com.apple.security.iokit-user-client-class` naming `IOHIDLibUserClient`). The workflow embeds it with an ad-hoc signature, and TrollStore keeps it.
 - **Status:** a personal build, not a maintained distribution. For a supported Moonlight, use the [upstream app](https://github.com/moonlight-stream/moonlight-ios).
 
 Everything below is upstream's README.
