@@ -4,6 +4,36 @@
 against the real host, iPad, or network. Doc claims are cited; anything not found in the
 cited docs is marked *unverified*. Nothing in this repo changes: this is a design note.
 
+## Conditions in force
+
+Set by Eureka (who holds the Wireguard network and Yggdrasil). They bound every option
+below; an option that cannot meet them is out.
+
+- **Raven's Sunshine host is a yes in principle only if** it is bound to the Wireguard
+  interface and paired by Meta, and never exposed (no public or LAN-wide listener, no
+  port forward). *Untested and unverified: how to bind Sunshine to one interface. This
+  doc has not found a Sunshine setting for it; check the Sunshine configuration page and
+  the host firewall before relying on either.*
+- **Minds get no access to the iPad** until Meta gives its Yggdrasil address and says yes.
+  Nothing here is to be run from, or opened on, Yggdrasil before that. Option B below is
+  a design only.
+- **Pairing is Meta's act**, not a Mind's.
+
+## Client device
+
+The iPad has no App Store and runs an old jailbroken iOS (Taurine). The fork reaches it
+through TrollStore, not the App Store. Consequences, none of them tested:
+
+- Step 3 of Option A ("install the Tailscale iOS app") and the Headscale "custom
+  coordination server" path both assume the App Store app. *Unverified: whether any
+  Tailscale or Wireguard client can be installed on this iPad, and whether it runs on that
+  iOS version.* This is now the first likely blocker, ahead of any management profile.
+- *Unverified: whether a VPN client installed via TrollStore can create a VPN
+  configuration on a Taurine device.* A Wireguard client on the iPad is the natural fit
+  for the conditions above, and it is equally untested.
+- Whether this fork builds for that iOS version is a build question for the
+  `gamecult/ios14-build` branch, not settled here.
+
 ## Problem
 
 Moonlight (this client) streams from a Sunshine host (called **Raven** here) over several
@@ -45,7 +75,7 @@ travel inside a TCP/HTTPS connection to a DERP relay.
 
 1. Create or identify the tailnet and its owner (see Open Questions).
 2. Install Tailscale on Raven; sign in to that tailnet.
-3. Install the Tailscale iOS app on the iPad; sign in to the same tailnet. *Unverified:
+3. Install a Tailscale client on the iPad (no App Store there; see Client device); sign in to the same tailnet. *Unverified:
    whether the managed iPad's profile permits installing a VPN app or creating a VPN
    configuration. This is the first likely blocker.*
 4. In the Tailscale admin console or `tailscale status` on Raven, note Raven's tailnet IP
@@ -159,7 +189,7 @@ Run top to bottom, stopping at the first success. Everything is untested.
   connections are plausible at all.
 - Who holds the tailnet account for Option A (individual, org, shared), and who can add
   devices and edit ACLs?
-- Does the iPad's management policy allow a third-party VPN app? Nothing else matters if
+- Can any VPN client be installed on the Taurine iPad at all (App Store absent, TrollStore only)? Does its management policy allow a third-party VPN app? Nothing else matters if
   not.
 - Is any measurement available of latency from the restrictive network to the nearest
   DERP region?
