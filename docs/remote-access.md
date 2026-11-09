@@ -32,9 +32,10 @@ docs is marked *unverified*. Nothing in this repo changes: this is a design note
 Set by Eureka (who holds the Wireguard network and Yggdrasil). They bound every option
 below; an option that cannot meet them is out.
 
-- **Starfire's Sunshine host (these conditions were set when Raven was assumed to be the host; they carry over until Eureka says otherwise) is a yes in principle only if** it is bound to the Wireguard
+- **Starfire's Sunshine host is a yes in principle only if** it is bound to the Wireguard
   interface and paired by Meta, and never exposed (no public or LAN-wide listener, no
-  port forward). *Untested and unverified: how to bind Sunshine to one interface. This
+  port forward). These conditions were set when Raven was assumed to be the host; they
+  carry over until Eureka says otherwise. *Untested and unverified: how to bind Sunshine to one interface. This
   doc has not found a Sunshine setting for it; check the Sunshine configuration page and
   the host firewall before relying on either.*
 - **Minds get no access to the iPad** until Meta gives its Yggdrasil address and says yes.
@@ -177,7 +178,9 @@ tailnet's ACLs should restrict the iPad to Starfire's Moonlight ports only
 
 ## Failure ladder
 
-Run top to bottom, stopping at the first success. Everything is untested.
+Run top to bottom, stopping at the first success. Only the home-network baseline pair
+(step 1; see Verified) is known to work; nothing from step 2 down has been run by anyone,
+so each step's expected outcome is a prediction.
 
 1. Home/LAN: confirm Moonlight streams to Starfire with no overlay (baseline).
 2. Tailscale on both devices at the LAN: confirm tailnet IP works, `tailscale ping` is
@@ -232,3 +235,9 @@ Run top to bottom, stopping at the first success. Everything is untested.
 - <https://headscale.net/stable/usage/connect/apple/>
 - <https://docs.lizardbyte.dev/projects/sunshine/latest/md_docs_2getting__started.html>
 - <https://docs.lizardbyte.dev/projects/sunshine/latest/md_docs_2configuration.html>
+
+## CI note
+
+`.github/workflows/ci.yml` runs `xcodebuild` on `macos-latest`. The forge's `docker` runner
+cannot run Xcode, so that workflow is left as is and does not run on this forge; this doc
+change needs no CI.
