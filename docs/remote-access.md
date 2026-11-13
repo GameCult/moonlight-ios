@@ -35,9 +35,10 @@ below; an option that cannot meet them is out.
 - **Starfire's Sunshine host is a yes in principle only if** it is bound to the Wireguard
   interface and paired by Meta, and never exposed (no public or LAN-wide listener, no
   port forward). These conditions were set when Raven was assumed to be the host; they
-  carry over until Eureka says otherwise. *Untested and unverified: how to bind Sunshine to one interface. This
+  carry over until Eureka says otherwise.
+  *Untested and unverified: how to bind Sunshine to one interface.* This
   doc has not found a Sunshine setting for it; check the Sunshine configuration page and
-  the host firewall before relying on either.*
+  the host firewall before relying on either.
 - **Minds get no access to the iPad** until Meta gives its Yggdrasil address and says yes.
   Nothing here is to be run from, or opened on, Yggdrasil before that. Option B below is
   a design only.
@@ -238,6 +239,6 @@ so each step's expected outcome is a prediction.
 
 ## CI note
 
-`.github/workflows/ci.yml` runs `xcodebuild` on `macos-latest`. The forge's `docker` runner
-cannot run Xcode, so that workflow is left as is and does not run on this forge; this doc
-change needs no CI.
+The repo has no CI workflow: the only job needed `xcodebuild` on `macos-latest`, and the forge
+has no Mac runner, so it could never run. iOS builds are verified by hand until a Mac runner
+exists.
